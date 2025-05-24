@@ -27,6 +27,9 @@ const (
 	// Delimitadores
 	DELIMITER TokenType = "DELIMITER"
 	
+	// Strings
+	STRING TokenType = "STRING"
+	
 	// Errores
 	SYNTAX_ERROR TokenType = "SYNTAX_ERROR"
 	
