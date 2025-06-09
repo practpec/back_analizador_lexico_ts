@@ -322,20 +322,17 @@ func (ls *LexicalService) isDelimiterOrOperator(char rune) bool {
 	return strings.ContainsRune(delimiters+operators, char)
 }
 
-// getDelimiterOperatorType determina el tipo de token para delimitadores y operadores
+
 func (ls *LexicalService) getDelimiterOperatorType(char rune) models.TokenType {
-	delimiters := "(){}[];,.\"'"  // Agregamos comillas dobles y simples
-	
+	delimiters := "(){}[];,.\"'"  
 	if strings.ContainsRune(delimiters, char) {
 		return models.DELIMITER
 	}
 	return models.OPERATOR
 }
 
-// initializeReservedWords inicializa el mapa de palabras reservadas de TypeScript
 func initializeReservedWords() map[string]bool {
 	words := []string{
-		// Palabras clave básicas
 		"abstract", "any", "as", "async", "await", "boolean", "break", "case", "catch",
 		"class", "const", "constructor", "continue", "debugger", "declare", "default",
 		"delete", "do", "else", "enum", "export", "extends", "false", "finally",
