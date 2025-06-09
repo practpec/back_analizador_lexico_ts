@@ -37,21 +37,16 @@ func (ls *LexicalService) Analyze(code string) models.AnalysisResponse {
 	}
 }
 
-// isValidIdentifierChar verifica si un carácter es válido para identificadores
+// isValidIdentifierChar verifica si un carácter es válido para identificadores (incluyendo Unicode)
 func (ls *LexicalService) isValidIdentifierChar(char rune) bool {
-	// Solo permitir letras ASCII, números y guión bajo
-	return (char >= 'a' && char <= 'z') ||
-		   (char >= 'A' && char <= 'Z') ||
-		   (char >= '0' && char <= '9') ||
-		   char == '_'
+	// Permitir letras Unicode, números y guión bajo
+	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '_'
 }
 
 // isValidIdentifierStart verifica si un carácter puede iniciar un identificador
 func (ls *LexicalService) isValidIdentifierStart(char rune) bool {
-	// Solo permitir letras ASCII y guión bajo para iniciar
-	return (char >= 'a' && char <= 'z') ||
-		   (char >= 'A' && char <= 'Z') ||
-		   char == '_'
+	// Permitir letras Unicode y guión bajo para iniciar
+	return unicode.IsLetter(char) || char == '_'
 }
 
 // analyzeLine analiza una línea individual de código
@@ -64,6 +59,22 @@ func (ls *LexicalService) analyzeLine(line string, lineNum int) ([]models.Token,
 		// Saltar espacios en blanco
 		if unicode.IsSpace(rune(line[i])) {
 			i++
+			continue
+		}
+		
+		// Verificar comentarios de línea (//)
+		if i < len(line)-1 && line[i] == '/' && line[i+1] == '/' {
+			comment, newPos := ls.extractComment(line, i, lineNum)
+			tokens = append(tokens, comment)
+			i = newPos
+			continue
+		}
+		
+		// Verificar comentarios de bloque (/* */)
+		if i < len(line)-1 && line[i] == '/' && line[i+1] == '*' {
+			comment, newPos := ls.extractBlockComment(line, i, lineNum)
+			tokens = append(tokens, comment)
+			i = newPos
 			continue
 		}
 		
@@ -87,7 +98,7 @@ func (ls *LexicalService) analyzeLine(line string, lineNum int) ([]models.Token,
 			continue
 		}
 		
-		// Verificar identificadores y palabras reservadas
+		// Verificar identificadores y palabras reservadas (ahora con soporte Unicode)
 		if ls.isValidIdentifierStart(rune(line[i])) {
 			token, newPos, err := ls.extractIdentifier(line, i, lineNum)
 			if err != nil {
@@ -99,8 +110,24 @@ func (ls *LexicalService) analyzeLine(line string, lineNum int) ([]models.Token,
 			continue
 		}
 		
-		// Verificar delimitadores y operadores (sin comillas, ya procesadas arriba)
+		// Verificar delimitadores y operadores (excepto : que puede ser parte de tipos)
 		if ls.isDelimiterOrOperator(rune(line[i])) {
+			// Manejo especial para operadores compuestos
+			if i < len(line)-1 {
+				twoChar := line[i:i+2]
+				if ls.isTwoCharOperator(twoChar) {
+					token := models.Token{
+						Type:     models.OPERATOR,
+						Value:    twoChar,
+						Line:     lineNum,
+						Position: i + 1,
+					}
+					tokens = append(tokens, token)
+					i += 2
+					continue
+				}
+			}
+			
 			token := models.Token{
 				Type:     ls.getDelimiterOperatorType(rune(line[i])),
 				Value:    string(line[i]),
@@ -109,18 +136,6 @@ func (ls *LexicalService) analyzeLine(line string, lineNum int) ([]models.Token,
 			}
 			tokens = append(tokens, token)
 			i++
-			continue
-		}
-		
-		// Manejar identificadores inválidos que contienen caracteres especiales
-		if unicode.IsLetter(rune(line[i])) || line[i] == '_' {
-			invalidToken, newPos := ls.extractInvalidIdentifier(line, i, lineNum)
-			errors = append(errors, models.Error{
-				Message:  "Identificador inválido: '" + invalidToken + "' contiene caracteres no permitidos",
-				Line:     lineNum,
-				Position: i + 1,
-			})
-			i = newPos
 			continue
 		}
 		
@@ -134,6 +149,45 @@ func (ls *LexicalService) analyzeLine(line string, lineNum int) ([]models.Token,
 	}
 	
 	return tokens, errors
+}
+
+// extractComment extrae un comentario de línea completo
+func (ls *LexicalService) extractComment(line string, start int, lineNum int) (models.Token, int) {
+	// Un comentario de línea va hasta el final de la línea
+	comment := line[start:]
+	
+	return models.Token{
+		Type:     models.COMMENT,
+		Value:    comment,
+		Line:     lineNum,
+		Position: start + 1,
+	}, len(line)
+}
+
+// extractBlockComment extrae un comentario de bloque
+func (ls *LexicalService) extractBlockComment(line string, start int, lineNum int) (models.Token, int) {
+	end := start + 2 // Empezar después de /*
+	
+	// Buscar */
+	for end < len(line)-1 {
+		if line[end] == '*' && line[end+1] == '/' {
+			end += 2 // Incluir */
+			break
+		}
+		end++
+	}
+	
+	// Si no encontramos el cierre en esta línea, tomar hasta el final
+	if end >= len(line)-1 && !(end >= 2 && line[end-2:end] == "*/") {
+		end = len(line)
+	}
+	
+	return models.Token{
+		Type:     models.COMMENT,
+		Value:    line[start:end],
+		Line:     lineNum,
+		Position: start + 1,
+	}, end
 }
 
 // extractString extrae un string completo (entre comillas) y detecta strings sin cerrar
@@ -171,20 +225,6 @@ func (ls *LexicalService) extractString(line string, start int, lineNum int) (mo
 		Position: start + 1,
 	}, end, nil
 }
-func (ls *LexicalService) extractInvalidIdentifier(line string, start int, lineNum int) (string, int) {
-	end := start
-	
-	// Continuar mientras sea letra, número, guión bajo O caracteres especiales
-	for end < len(line) {
-		char := rune(line[end])
-		if unicode.IsSpace(char) || ls.isDelimiterOrOperator(char) {
-			break
-		}
-		end++
-	}
-	
-	return line[start:end], end
-}
 
 // extractNumber extrae un número completo de la línea
 func (ls *LexicalService) extractNumber(line string, start int, lineNum int) (models.Token, int) {
@@ -209,7 +249,7 @@ func (ls *LexicalService) extractNumber(line string, start int, lineNum int) (mo
 	}, end
 }
 
-// extractIdentifier extrae un identificador o palabra reservada válida
+// extractIdentifier extrae un identificador o palabra reservada válida (con soporte Unicode)
 func (ls *LexicalService) extractIdentifier(line string, start int, lineNum int) (models.Token, int, *models.Error) {
 	end := start
 	
@@ -225,25 +265,6 @@ func (ls *LexicalService) extractIdentifier(line string, start int, lineNum int)
 	// Extraer el resto del identificador
 	for end < len(line) && ls.isValidIdentifierChar(rune(line[end])) {
 		end++
-	}
-	
-	// Verificar si hay caracteres inválidos después
-	if end < len(line) && !unicode.IsSpace(rune(line[end])) && !ls.isDelimiterOrOperator(rune(line[end])) {
-		// Encontrar el final del token inválido
-		invalidEnd := end
-		for invalidEnd < len(line) {
-			char := rune(line[invalidEnd])
-			if unicode.IsSpace(char) || ls.isDelimiterOrOperator(char) {
-				break
-			}
-			invalidEnd++
-		}
-		
-		return models.Token{}, invalidEnd, &models.Error{
-			Message:  "Identificador inválido: '" + line[start:invalidEnd] + "' contiene caracteres no permitidos",
-			Line:     lineNum,
-			Position: start + 1,
-		}
 	}
 	
 	value := line[start:end]
@@ -316,15 +337,25 @@ func (ls *LexicalService) suggestCorrection(word string) string {
 
 // isDelimiterOrOperator verifica si un carácter es delimitador u operador
 func (ls *LexicalService) isDelimiterOrOperator(char rune) bool {
-	delimiters := "(){}[];,.\"'"  // Agregamos comillas dobles y simples
-	operators := "+-*/=<>!&|^%~"
+	delimiters := "(){}[];,."
+	operators := "+-*/=<>!&|^%~:"
 	
 	return strings.ContainsRune(delimiters+operators, char)
 }
 
+// isTwoCharOperator verifica si es un operador de dos caracteres
+func (ls *LexicalService) isTwoCharOperator(op string) bool {
+	twoCharOps := []string{"==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/="}
+	for _, twoChar := range twoCharOps {
+		if op == twoChar {
+			return true
+		}
+	}
+	return false
+}
 
 func (ls *LexicalService) getDelimiterOperatorType(char rune) models.TokenType {
-	delimiters := "(){}[];,.\"'"  
+	delimiters := "(){}[];,."
 	if strings.ContainsRune(delimiters, char) {
 		return models.DELIMITER
 	}

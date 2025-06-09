@@ -30,6 +30,9 @@ const (
 	// Strings
 	STRING TokenType = "STRING"
 	
+	// Comentarios
+	COMMENT TokenType = "COMMENT"
+	
 	// Errores
 	SYNTAX_ERROR TokenType = "SYNTAX_ERROR"
 	
